@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>BarzzxAI (Gemini) — Final</title>
+<style>
+  :root{
+    --bg:#0b0b0c; --panel:#111; --muted:#9aa0a6; --accent:#1e90ff;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; font-family:Inter, Arial, sans-serif;
+    background:var(--bg); color:#fff; height:100vh; display:flex; overflow:hidden;
+  }
+
+  /* SIDEBAR (chat list) */
+  #sidebar{
+    width:280px; background:var(--panel); border-right:1px solid #222;
+    display:flex; flex-direction:column; padding:12px; gap:8px; transform:translateX(-320px);
+    transition:transform .18s ease; z-index:50;
+  }
+  #sidebar.open{ transform:translateX(0); }
+  #sidebar h3{ margin:0 0 6px 0; font-size:16px }
+  #newChatBtn{ background:var(--accent); border:none; color:#fff; padding:8px; border-radius:8px; cursor:pointer; }
+  #historyList{ display:flex; flex-direction:column; gap:6px; overflow:auto; max-height:calc(100vh - 140px); padding-right:6px;}
+
+  /* MAIN */
+  #main{ flex:1; display:flex; flex-direction:column; min-width:0; }
+
+  header{
+    height:56px; display:flex; align-items:center; justify-content:space-between;
+    padding:0 12px; background:var(--panel); border-bottom:1px solid #222;
+  }
+  #menuBtn{ background:none; border:none; color:#fff; font-size:22px; cursor:pointer; }
+  #title{ font-weight:600; }
+
+  /* chat area */
+  #chatWrap{ flex:1; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+  #chat{ flex:1; overflow:auto; padding:18px; display:flex; flex-direction:column; gap:10px; align-items:flex-start; }
+
+  .bubble{ max-width:78%; padding:12px 14px; border-radius:14px; line-height:1.45; word-wrap:break-word; white-space:pre-wrap; }
+  .bubble.user{ align-self:flex-end; background:var(--accent); color:#fff; border-bottom-right-radius:6px; }
+  .bubble.ai{ align-self:flex-start; background:#222; color:#fff; border-bottom-left-radius:6px; }
+
+  .bubble img{ max-width:220px; border-radius:10px; display:block }
+
+  /* typing bubble (animated dots) */
+  .typingBubble{ align-self:flex-start; background:#222; color:var(--muted); padding:10px 12px; border-radius:14px; display:flex; gap:8px; align-items:center; }
+  .dot{ width:7px; height:7px; background:var(--muted); border-radius:50%; display:inline-block; animation:blink 1.2s infinite both;}
+  .dot:nth-child(2){ animation-delay:.18s } .dot:nth-child(3){ animation-delay:.36s }
+  @keyframes blink{ 0%{ opacity:.2 } 20%{ opacity:1 } 100%{ opacity:.2 } }
+
+  /* input fixed bottom */
+  footer{ position:fixed; bottom:0; left:0; right:0; display:flex; gap:8px; padding:10px; background:var(--panel); align-items:center; border-top:1px solid #222; }
+  #fileBtn, #sendBtn{ background:none; border:0; color:#fff; font-size:20px; cursor:pointer; padding:8px; border-radius:8px; }
+  #inputField{ flex:1; background:#0f0f10; border:1px solid #222; padding:12px 14px; border-radius:24px; color:#fff; outline:none; }
+
+  /* small helpers */
+  .meta{ font-size:12px; color:var(--muted); margin-top:4px }
+  .hist-item{ background:#0f0f10; border:1px solid #222; color:#fff; padding:8px; border-radius:8px; text-align:left; cursor:pointer }
+  .hist-item:hover{ background:#171717 }
+
+  /* responsive: when sidebar open on small screens, overlay main */
+  @media(max-width:780px){
+    #sidebar{ position:fixed; top:0; bottom:0; left:0; z-index:80; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- SIDEBAR -->
+  <aside id="sidebar" aria-hidden="true">
+    <h3>Obrolan</h3>
+    <button id="newChatBtn">+ Obrolan Baru</button>
+    <div id="historyList"></div>
+    <div style="margin-top:auto; font-size:12px; color:var(--muted)">Penyimpanan lokal (text + gambar kecil). Upload max 10MB.</div>
+  </aside>
+
+  <!-- MAIN -->
+  <div id="main">
+    <header>
+      <div style="display:flex;gap:12px;align-items:center">
+        <button id="menuBtn" aria-label="Menu">☰</button>
+        <div id="title">BarzzxAI</div>
+      </div>
+      <div style="font-size:13px;color:var(--muted)">Gemini integration</div>
+    </header>
+
+    <div id="chatWrap">
+      <div id="chat"></div>
+    </div>
+
+    <!-- typingIndicator is appended into chat as bubble; keep placeholder if needed -->
+  </div>
+
+  <!-- FOOTER / INPUT -->
+  <footer>
+    <input type="file" id="fileInput" accept="image/*" style="display:none" />
+    <button id="fileBtn" title="Attach image">📎</button>
+    <input id="inputField" type="text" placeholder="Ketik pesan..." autocomplete="off" />
+    <button id="sendBtn" title="Kirim pesan">➤</button>
+  </footer>
+
+<script>
+/* ========== CONFIG ========== */
+const GEMINI_API_KEY = "AIzaSyD_Ln3qBXgz2Zt79QeEbctA-mdCWcEnGbg"; // <-- ganti dengan API key Gemini-mu
+const MODEL_NAME = "gemini-2.5-flash";       // <-- contoh model, ganti jika perlu
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1/models/${MODEL_NAME}:generateContent?key=${GEMINI_API_KEY}`;
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+const STORAGE_KEY_CHATS = "barzzx_saved_chats_v1";
+const STORAGE_KEY_CURRENT = "barzzx_current_chat_v1";
+
+/* ========== UI refs ========== */
+const sidebar = document.getElementById("sidebar");
+const menuBtn = document.getElementById("menuBtn");
+const newChatBtn = document.getElementById("newChatBtn");
+const historyList = document.getElementById("historyList");
+const chatEl = document.getElementById("chat");
+const inputField = document.getElementById("inputField");
+const sendBtn = document.getElementById("sendBtn");
+const fileBtn = document.getElementById("fileBtn");
+const fileInput = document.getElementById("fileInput");
+
+/* ========== app state ========== */
+let savedChats = [];     // array of chat sessions {id, createdAt, messages: [{role,type,content}]}
+let currentChat = [];    // messages of active chat [{role,type,content}]
+let typingBubbleEl = null;
+
+/* ========== Helpers ========== */
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,8) }
+
+function createBubble(msg){
+  // msg: {role:'user'|'ai', type:'text'|'image', content: string}
+  const d = document.createElement("div");
+  d.className = "bubble " + (msg.role === "user" ? "user" : "ai");
+  if(msg.type === "image"){
+    const img = document.createElement("img");
+    img.src = msg.content;
+    img.alt = "image";
+    img.onload = () => scrollBottom();
+    d.appendChild(img);
+  } else {
+    d.textContent = msg.content;
+  }
+  return d;
+}
+
+function appendMessageToUI(msg){
+  const el = createBubble(msg);
+  chatEl.appendChild(el);
+  scrollBottom();
+}
+
+function scrollBottom(){ chatEl.scrollTop = chatEl.scrollHeight; }
+
+/* ========== typing indicator (bubble with animated dots) ========== */
+function showTypingIndicator(){
+  // ensure only one
+  hideTypingIndicator();
+  const el = document.createElement("div");
+  el.className = "typingBubble";
+  el.innerHTML = `<div style="font-size:13px;color:var(--muted)">BarzzxAI sedang mengetik</div>
+    <div style="display:flex;gap:6px;margin-left:8px">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+    </div>`;
+  // wrap to match bubble style
+  const wrapper = document.createElement("div");
+  wrapper.style.alignSelf = "flex-start";
+  wrapper.appendChild(el);
+  chatEl.appendChild(wrapper);
+  typingBubbleEl = wrapper;
+  scrollBottom();
+}
+function hideTypingIndicator(){
+  if(typingBubbleEl){ typingBubbleEl.remove(); typingBubbleEl = null; }
+}
+
+/* ========== Storage handling ========== */
+function loadSavedChats(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY_CHATS);
+    savedChats = raw ? JSON.parse(raw) : [];
+  }catch(e){ savedChats = []; console.warn("loadSavedChats failed", e) }
+  renderHistory();
+}
+
+function saveSavedChats(){
+  try{
+    const payload = JSON.stringify(savedChats);
+    // check size <= 10MB (user said ok to 10MB)
+    const size = new Blob([payload]).size;
+    if(size > 10*1024*1024){
+      alert("Peringatan: data chat terlalu besar untuk disimpan (lebih dari 10MB). Beberapa gambar mungkin tidak disimpan.");
+      // fallback: don't save images inside chats to reduce size
+      const shallow = savedChats.map(c => ({
+        id:c.id, createdAt:c.createdAt,
+        messages: c.messages.map(m => m.type === "image" ? {role:m.role, type:"image", content:"[gambar]"} : m)
+      }));
+      localStorage.setItem(STORAGE_KEY_CHATS, JSON.stringify(shallow));
+      return;
+    }
+    localStorage.setItem(STORAGE_KEY_CHATS, payload);
+  }catch(e){
+    console.error("saveSavedChats failed", e);
+  }
+}
+
+function saveCurrentChatToTemp(){
+  try{
+    localStorage.setItem(STORAGE_KEY_CURRENT, JSON.stringify(currentChat));
+  }catch(e){ console.warn("saving current chat failed", e) }
+}
+
+function loadCurrentChat(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY_CURRENT);
+    currentChat = raw ? JSON.parse(raw) : [];
+  }catch(e){ currentChat = []; }
+}
+
+/* ========== History UI ========== */
+function renderHistory(){
+  historyList.innerHTML = "";
+  savedChats.forEach((c, idx) => {
+    const btn = document.createElement("div");
+    btn.className = "hist-item";
+    btn.textContent = (new Date(c.createdAt)).toLocaleString() + " — " + (c.messages.find(m=>m.type==='text')?.content?.slice(0,40) || "[gambar]");
+    btn.onclick = ()=>{ loadChat(idx); sidebar.classList.remove('open'); }
+    historyList.appendChild(btn);
+  });
+}
+
+/* ========== Chat actions ========== */
+function loadChat(index){
+  const session = savedChats[index];
+  if(!session) return;
+  currentChat = JSON.parse(JSON.stringify(session.messages)); // clone
+  chatEl.innerHTML = "";
+  currentChat.forEach(m => appendMessageToUI(m));
+  scrollBottom();
+}
+
+function newChat(){
+  // if current has content, push to savedChats
+  if(currentChat.length > 0){
+    savedChats.unshift({ id: uid(), createdAt: Date.now(), messages: currentChat });
+    // keep reasonable history size (optional) — remove old if too many
+    if(savedChats.length > 50) savedChats.pop();
+    saveSavedChats();
+    renderHistory();
+  }
+  currentChat = [];
+  chatEl.innerHTML = "";
+  const welcome = { role:'ai', type:'text', content: `Hello, World 👋\nHaii Saya BarzzxAI 😎 Ada yang bisa saya bantu?` };
+  currentChat.push(welcome);
+  appendMessageToUI(welcome);
+  saveCurrentChatToTemp();
+}
+
+/* ========== File upload handling (10MB limit) ========== */
+fileBtn.addEventListener('click', ()=> fileInput.click());
+fileInput.addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if(!f) return;
+  if(f.size > MAX_UPLOAD_BYTES){
+    alert("File terlalu besar. Batas upload: 10 MB.");
+    fileInput.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result; // data:image/...
+    const msg = { role:'user', type:'image', content: dataUrl };
+    currentChat.push(msg);
+    appendMessageToUI(msg);
+    saveCurrentChatToTemp();
+  };
+  reader.readAsDataURL(f);
+});
+
+/* ========== Gemini API call ========== */
+async function callGemini(parts){
+  // parts: array of part objects, e.g. [{text:"hello"}, {inline_data:{mime_type:"image/png", data:"...base64..."}}]
+  const body = { contents:[{ parts }] };
+  const res = await fetch(GEMINI_URL, {
+    method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  return data;
+}
+
+/* ========== send message flow ========== */
+async function sendMessage(){
+  const text = inputField.value.trim();
+  const lastImage = (currentChat.length && currentChat[currentChat.length-1].type === 'image') ? currentChat[currentChat.length-1] : null;
+  if(!text && !lastImage) return;
+
+  if(text){
+    const userMsg = { role:'user', type:'text', content: text };
+    currentChat.push(userMsg);
+    appendMessageToUI(userMsg);
+    inputField.value = "";
+    saveCurrentChatToTemp();
+  }
+
+  // prepare parts for Gemini
+  const parts = [];
+  if(text) parts.push({ text });
+  if(lastImage){
+    // inline image uses base64 without prefix
+    const dataUrl = lastImage.content;
+    const comma = dataUrl.indexOf(',');
+    const base64 = comma >= 0 ? dataUrl.slice(comma+1) : dataUrl;
+    parts.push({ inline_data: { mime_type: dataUrl.split(';')[0].split(':')[1] || 'image/png', data: base64 } });
+  }
+
+  // show typing indicator bubble
+  showTypingIndicator();
+
+  try{
+    const data = await callGemini(parts);
+    hideTypingIndicator();
+    // check for error
+    if(data.error){
+      const errMsg = { role:'ai', type:'text', content: `⚠️ Gemini Error: ${data.error.message || JSON.stringify(data.error)}` };
+      currentChat.push(errMsg);
+      appendMessageToUI(errMsg);
+      saveCurrentChatToTemp();
+      return;
+    }
+    // read reply safely
+    const replyText = data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('\n') || null;
+    if(replyText){
+      const aiMsg = { role:'ai', type:'text', content: replyText };
+      currentChat.push(aiMsg);
+      appendMessageToUI(aiMsg);
+      saveCurrentChatToTemp();
+    } else {
+      const aiMsg = { role:'ai', type:'text', content: '⚠️ Tidak ada balasan dari Gemini.' };
+      currentChat.push(aiMsg);
+      appendMessageToUI(aiMsg);
+      saveCurrentChatToTemp();
+      console.error('unexpected response', data);
+    }
+  }catch(err){
+    hideTypingIndicator();
+    const aiMsg = { role:'ai', type:'text', content: '❌ Error jaringan: ' + (err.message||err) };
+    currentChat.push(aiMsg);
+    appendMessageToUI(aiMsg);
+    saveCurrentChatToTemp();
+  }
+}
+
+/* ========== UI wiring ========== */
+menuBtn.addEventListener('click', ()=> sidebar.classList.toggle('open'));
+newChatBtn.addEventListener('click', ()=> { sidebar.classList.remove('open'); newChat(); renderHistory(); saveSavedChats(); });
+sendBtn.addEventListener('click', sendMessage);
+inputField.addEventListener('keydown', (e)=> { if(e.key==='Enter') { e.preventDefault(); sendMessage(); } });
+
+/* ========== init ========== */
+(function init(){
+  loadSavedChats();
+  loadCurrentChat();
+  if(currentChat && currentChat.length>0){
+    chatEl.innerHTML = "";
+    currentChat.forEach(m => appendMessageToUI(m));
+  } else {
+    newChat();
+  }
+  renderHistory();
+})();
+</script>
+</body>
+</html>
